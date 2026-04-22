@@ -1,0 +1,30 @@
+name: Monitor CSJN
+
+on:
+  schedule:
+    - cron: '0 12 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias
+        run: |
+          pip install google-generativeai playwright
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Correr monitor
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          EMAIL_DESTINO:  ${{ secrets.EMAIL_DESTINO }}
+          EMAIL_ORIGEN:   ${{ secrets.EMAIL_ORIGEN }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        run: python monitor_csjn.py
