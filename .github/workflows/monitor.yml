@@ -17,7 +17,7 @@ jobs:
 
       - name: Instalar dependencias
         run: |
-          pip install google-generativeai playwright
+          pip install google-genai playwright
           playwright install chromium
           playwright install-deps chromium
 
