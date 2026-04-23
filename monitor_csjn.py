@@ -89,7 +89,7 @@ Respondé ÚNICAMENTE con JSON válido, sin texto adicional ni bloques de códig
 Si ninguno es relevante: {{"relevantes": []}}"""
 
     respuesta = cliente.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.0-flash-lite",
         contents=prompt
     )
     txt = respuesta.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
