@@ -2,7 +2,7 @@ import os
 import json
 import smtplib
 import time
-import google.generativeai as genai
+from google import genai
 from datetime import date
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -19,8 +19,7 @@ Fuero en lo Penal Económico. Incluye:
 - Recursos extraordinarios que vengan de ese fuero
 """
 
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-modelo = genai.GenerativeModel("gemini-1.5-flash")
+cliente = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 EMAIL_DESTINO  = os.environ["EMAIL_DESTINO"]
 EMAIL_ORIGEN   = os.environ["EMAIL_ORIGEN"]
@@ -29,7 +28,6 @@ EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
 # ─── SCRAPING ─────────────────────────────────────────────────
 
 def scrape_pagina(page, url, selectores):
-    """Scrapea una página y devuelve lista de items."""
     items = []
     page.goto(url)
     page.wait_for_load_state("networkidle")
@@ -50,7 +48,6 @@ def obtener_todo():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
-        # Sentencias
         print("Scrapeando sentencias...")
         resultados["sentencias"] = scrape_pagina(
             page,
@@ -58,7 +55,6 @@ def obtener_todo():
             [".novedad", ".item-novedad", "tr.fila"]
         )
 
-        # Acordadas
         print("Scrapeando acordadas...")
         resultados["acordadas"] = scrape_pagina(
             page,
@@ -92,7 +88,10 @@ Respondé ÚNICAMENTE con JSON válido, sin texto adicional ni bloques de códig
 
 Si ninguno es relevante: {{"relevantes": []}}"""
 
-    respuesta = modelo.generate_content(prompt)
+    respuesta = cliente.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt
+    )
     txt = respuesta.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     resultado = json.loads(txt)
 
