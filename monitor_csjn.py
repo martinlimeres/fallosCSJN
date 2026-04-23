@@ -26,37 +26,66 @@ EMAIL_DESTINO  = os.environ["EMAIL_DESTINO"]
 EMAIL_ORIGEN   = os.environ["EMAIL_ORIGEN"]
 EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
 
-def obtener_novedades():
-    fallos = []
+# ─── SCRAPING ─────────────────────────────────────────────────
+
+def scrape_pagina(page, url, selectores):
+    """Scrapea una página y devuelve lista de items."""
+    items = []
+    page.goto(url)
+    page.wait_for_load_state("networkidle")
+    time.sleep(3)
+    for selector in selectores:
+        elementos = page.query_selector_all(selector)
+        for el in elementos:
+            texto = el.inner_text().strip()
+            if texto:
+                link_el = el.query_selector("a")
+                link = link_el.get_attribute("href") if link_el else ""
+                items.append({"texto": texto, "link": link})
+    return items
+
+def obtener_todo():
+    resultados = {"sentencias": [], "acordadas": []}
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto("https://sjconsulta.csjn.gov.ar/sjconsulta/novedades/consulta.html")
-        page.wait_for_load_state("networkidle")
-        time.sleep(3)
-        items = page.query_selector_all(".novedad, .item-novedad, tr.fila")
-        for item in items:
-            texto = item.inner_text().strip()
-            if texto:
-                link_el = item.query_selector("a")
-                link = link_el.get_attribute("href") if link_el else ""
-                fallos.append({"texto": texto, "link": link})
-        browser.close()
-    return fallos
 
-def filtrar_con_gemini(fallos):
-    if not fallos:
+        # Sentencias
+        print("Scrapeando sentencias...")
+        resultados["sentencias"] = scrape_pagina(
+            page,
+            "https://sjconsulta.csjn.gov.ar/sjconsulta/novedades/consulta.html",
+            [".novedad", ".item-novedad", "tr.fila"]
+        )
+
+        # Acordadas
+        print("Scrapeando acordadas...")
+        resultados["acordadas"] = scrape_pagina(
+            page,
+            "https://www.csjn.gov.ar/decisiones/acordadas",
+            [".acordada", ".item-acordada", "tr.fila", "table tr"]
+        )
+
+        browser.close()
+    return resultados
+
+# ─── ANÁLISIS CON GEMINI ───────────────────────────────────────
+
+def filtrar_con_gemini(items, tipo):
+    if not items:
         return []
-    fallos_texto = "\n\n---\n\n".join(
-        [f"FALLO #{i+1}:\n{f['texto']}" for i, f in enumerate(fallos)]
+
+    texto = "\n\n---\n\n".join(
+        [f"#{i+1}:\n{f['texto']}" for i, f in enumerate(items)]
     )
+
     prompt = f"""Sos un asistente especializado en derecho penal económico argentino.
-Analizá los siguientes fallos de la CSJN y determiná cuáles son relevantes para:
+Analizá los siguientes {tipo} de la CSJN y determiná cuáles son relevantes para:
 
 {TEMAS_DE_INTERES}
 
-FALLOS:
-{fallos_texto}
+{tipo.upper()}:
+{texto}
 
 Respondé ÚNICAMENTE con JSON válido, sin texto adicional ni bloques de código:
 {{"relevantes": [{{"numero": 1, "motivo": "por qué es relevante en una línea", "resumen": "resumen en 2-3 oraciones"}}]}}
@@ -64,54 +93,74 @@ Respondé ÚNICAMENTE con JSON válido, sin texto adicional ni bloques de códig
 Si ninguno es relevante: {{"relevantes": []}}"""
 
     respuesta = modelo.generate_content(prompt)
-    texto = respuesta.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    resultado = json.loads(texto)
+    txt = respuesta.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    resultado = json.loads(txt)
+
     relevantes = []
     indices = {r["numero"] - 1: r for r in resultado["relevantes"]}
-    for idx, fallo in enumerate(fallos):
+    for idx, item in enumerate(items):
         if idx in indices:
-            fallo["analisis"] = indices[idx]
-            relevantes.append(fallo)
+            item["analisis"] = indices[idx]
+            relevantes.append(item)
     return relevantes
 
-def enviar_email(relevantes):
+# ─── EMAIL ─────────────────────────────────────────────────────
+
+def construir_seccion(titulo, items, color):
+    if not items:
+        return f"<p><strong>{titulo}:</strong> Sin novedades relevantes.</p>"
+    html = f"<h3 style='color:{color}'>{titulo} — {len(items)} novedad(es)</h3>"
+    for f in items:
+        link_html = f'<a href="{f["link"]}">Ver documento</a>' if f.get("link") else ""
+        html += f"""
+        <div style="border-left:4px solid {color}; padding-left:16px; margin-bottom:20px;">
+            <p><strong>Por qué es relevante:</strong> {f["analisis"]["motivo"]}</p>
+            <p><strong>Resumen:</strong> {f["analisis"]["resumen"]}</p>
+            <p style="color:#666;font-size:12px">{f["texto"][:300]}...</p>
+            {link_html}
+        </div>"""
+    return html
+
+def enviar_email(sentencias, acordadas):
     hoy = date.today().strftime("%d/%m/%Y")
-    if not relevantes:
+    total = len(sentencias) + len(acordadas)
+
+    if total == 0:
         asunto = f"[CSJN] {hoy} — Sin novedades de penal económico"
-        cuerpo = f"<h2>Monitor CSJN – {hoy}</h2><p>Sin fallos relevantes hoy.</p>"
     else:
-        asunto = f"[CSJN] {hoy} — {len(relevantes)} fallo(s) de penal económico"
-        items = ""
-        for f in relevantes:
-            link_html = f'<a href="{f["link"]}">Ver fallo</a>' if f.get("link") else ""
-            items += f"""
-            <div style="border-left:4px solid #c0392b; padding-left:16px; margin-bottom:24px;">
-                <p><strong>Por qué es relevante:</strong> {f["analisis"]["motivo"]}</p>
-                <p><strong>Resumen:</strong> {f["analisis"]["resumen"]}</p>
-                <p style="color:#666;font-size:12px">{f["texto"][:300]}...</p>
-                {link_html}
-            </div>"""
-        cuerpo = f"""
-        <h2>Monitor CSJN – {hoy}</h2>
-        <h3 style="color:#c0392b">{len(relevantes)} fallo(s) — Fuero Penal Económico</h3>
-        {items}
-        <hr><small>Fuente: sj.csjn.gov.ar</small>"""
+        asunto = f"[CSJN] {hoy} — {total} novedad(es) de penal económico"
+
+    cuerpo = f"""
+    <h2>Monitor CSJN – {hoy}</h2>
+    {construir_seccion("Sentencias", sentencias, "#c0392b")}
+    <br>
+    {construir_seccion("Acordadas", acordadas, "#2471a3")}
+    <hr><small>Fuente: sj.csjn.gov.ar — csjn.gov.ar</small>
+    """
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = asunto
     msg["From"]    = EMAIL_ORIGEN
     msg["To"]      = EMAIL_DESTINO
     msg.attach(MIMEText(cuerpo, "html"))
+
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(EMAIL_ORIGEN, EMAIL_PASSWORD)
         server.sendmail(EMAIL_ORIGEN, EMAIL_DESTINO, msg.as_string())
     print(f"✓ Email enviado: {asunto}")
 
+# ─── MAIN ──────────────────────────────────────────────────────
+
 if __name__ == "__main__":
-    print("Scrapeando novedades CSJN...")
-    fallos = obtener_novedades()
-    print(f"→ {len(fallos)} fallos encontrados")
-    print("Analizando con Gemini...")
-    relevantes = filtrar_con_gemini(fallos)
-    print(f"→ {len(relevantes)} relevantes")
-    print("Enviando email...")
-    enviar_email(relevantes)
+    datos = obtener_todo()
+
+    print("Analizando sentencias con Gemini...")
+    sentencias = filtrar_con_gemini(datos["sentencias"], "sentencias")
+
+    print("Analizando acordadas con Gemini...")
+    acordadas = filtrar_con_gemini(datos["acordadas"], "acordadas")
+
+    print(f"→ {len(sentencias)} sentencias relevantes")
+    print(f"→ {len(acordadas)} acordadas relevantes")
+
+    enviar_email(sentencias, acordadas)
