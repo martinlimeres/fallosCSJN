@@ -112,4 +112,62 @@ def construir_seccion(titulo, items, color):
     html = f"<h3 style='color:{color}'>{titulo} — {len(items)} novedad(es)</h3>"
     for f in items:
         link_html = f'<a href="{f["link"]}">Ver documento</a>' if f.get("link") else ""
-        html
+        html += f"""
+        <div style="border-left:4px solid {color}; padding-left:16px; margin-bottom:20px;">
+            <p><strong>Por qué es relevante:</strong> {f["analisis"]["motivo"]}</p>
+            <p><strong>Resumen:</strong> {f["analisis"]["resumen"]}</p>
+            <p style="color:#666;font-size:12px">{f["texto"][:300]}...</p>
+            {link_html}
+        </div>"""
+    return html
+
+def enviar_email(sentencias, acordadas):
+    hoy = date.today().strftime("%d/%m/%Y")
+    total = len(sentencias) + len(acordadas)
+
+    if total == 0:
+        asunto = f"[CSJN] {hoy} — Sin novedades de penal económico"
+    else:
+        asunto = f"[CSJN] {hoy} — {total} novedad(es) de penal económico"
+
+    cuerpo = f"""
+    <h2>Monitor CSJN – {hoy}</h2>
+    {construir_seccion("Sentencias", sentencias, "#c0392b")}
+    <br>
+    {construir_seccion("Acordadas", acordadas, "#2471a3")}
+    <hr><small>Fuente: sj.csjn.gov.ar — csjn.gov.ar</small>
+    """
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = asunto
+    msg["From"]    = EMAIL_ORIGEN
+    msg["To"]      = EMAIL_DESTINO
+    msg.attach(MIMEText(cuerpo, "html"))
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(EMAIL_ORIGEN, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_ORIGEN, EMAIL_DESTINO, msg.as_string())
+    print(f"✓ Email enviado: {asunto}")
+
+# ─── MAIN ──────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    try:
+        print("Iniciando script...")
+        datos = obtener_todo()
+
+        print("Analizando sentencias con OpenAI...")
+        sentencias = filtrar_con_openai(datos["sentencias"], "sentencias")
+
+        print("Analizando acordadas con OpenAI...")
+        acordadas = filtrar_con_openai(datos["acordadas"], "acordadas")
+
+        print(f"→ {len(sentencias)} sentencias relevantes")
+        print(f"→ {len(acordadas)} acordadas relevantes")
+
+        enviar_email(sentencias, acordadas)
+    except Exception as e:
+        import traceback
+        print("ERROR:")
+        traceback.print_exc()
+        raise
